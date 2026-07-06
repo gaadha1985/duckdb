@@ -102,7 +102,6 @@ static void ICUTimeZoneFunction(ClientContext &context, TableFunctionInput &data
 		is_dst.Append(Value::BOOLEAN(dst_offset_ms != 0));
 		++index;
 	}
-	output.SetCardinality(index);
 }
 
 struct ICUFromNaiveTimestamp : public ICUDateFunc {
@@ -164,7 +163,7 @@ struct ICUFromNaiveTimestamp : public ICUDateFunc {
 		CalendarPtr calendar(info.calendar->clone());
 
 		UnaryExecutor::Execute<SRC, DST>(source, result, count, [&](SRC input) {
-			using NAIVE = timebase_t<DST::PRECISION, false>;
+			using NAIVE = timestamp_base_t<DST::PRECISION, false>;
 			return Operation(calendar.get(), Cast::Operation<SRC, NAIVE>(input));
 		});
 		return true;
@@ -278,7 +277,7 @@ struct ICUToNaiveTimestamp : public ICUDateFunc {
 		CalendarPtr calendar(info.calendar->clone());
 
 		UnaryExecutor::Execute<SRC, DST>(source, result, count, [&](SRC input) {
-			using NAIVE = timebase_t<SRC::PRECISION, false>;
+			using NAIVE = timestamp_base_t<SRC::PRECISION, false>;
 			return Cast::Operation<NAIVE, DST>(Operation(calendar.get(), input));
 		});
 		return true;
@@ -371,7 +370,7 @@ struct ICULocalTimestampFunc : public ICUDateFunc {
 
 	static timestamp_t GetLocalTimestamp(ExpressionState &state) {
 		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.bind_info->Cast<BindDataNow>();
+		auto &info = func_expr.BindInfo()->Cast<BindDataNow>();
 		CalendarPtr calendar_ptr(info.calendar->clone());
 		auto calendar = calendar_ptr.get();
 
@@ -386,8 +385,8 @@ struct ICULocalTimestampFunc : public ICUDateFunc {
 		rdata[0] = GetLocalTimestamp(state);
 	}
 
-	static void AddFunction(const string &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set(name);
+	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
+		ScalarFunctionSet set {name};
 		set.AddFunction(ScalarFunction({}, LogicalType::TIMESTAMP, Execute, BindNow));
 		loader.RegisterFunction(set);
 	}
@@ -402,8 +401,8 @@ struct ICULocalTimeFunc : public ICUDateFunc {
 		rdata[0] = Timestamp::GetTime(local);
 	}
 
-	static void AddFunction(const string &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set(name);
+	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
+		ScalarFunctionSet set {name};
 		set.AddFunction(ScalarFunction({}, LogicalType::TIME, Execute, ICULocalTimestampFunc::BindNow));
 		loader.RegisterFunction(set);
 	}
@@ -517,36 +516,34 @@ struct ICUTimeZoneFunc : public ICUDateFunc {
 	template <typename OP, typename SRC, typename DST>
 	static void Execute(DataChunk &input, ExpressionState &state, Vector &result) {
 		auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-		auto &info = func_expr.bind_info->Cast<BindData>();
+		auto &info = func_expr.BindInfo()->Cast<BindData>();
 		CalendarPtr calendar_ptr(info.calendar->clone());
 		auto calendar = calendar_ptr.get();
 
 		// Two cases: constant TZ, variable TZ
 		D_ASSERT(input.ColumnCount() == 2);
-		auto &tz_vec = input.data[0];
-		auto &ts_vec = input.data[1];
+		const auto &tz_vec = input.data[0];
+		const auto &ts_vec = input.data[1];
 		if (tz_vec.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 			if (ConstantVector::IsNull(tz_vec)) {
 				throw InternalException("ICUTimeZone called with constant NULL tz");
 			}
 			SetTimeZone(calendar, *ConstantVector::GetData<string_t>(tz_vec));
-			UnaryExecutor::Execute<SRC, DST>(ts_vec, result, input.size(),
-			                                 [&](SRC ts) { return OP::Operation(calendar, ts); });
+			UnaryExecutor::Execute<SRC, DST>(ts_vec, result, [&](SRC ts) { return OP::Operation(calendar, ts); });
 		} else {
-			BinaryExecutor::Execute<string_t, SRC, DST>(tz_vec, ts_vec, result, input.size(),
-			                                            [&](string_t tz_id, SRC ts) {
-				                                            if (ts.IsFinite()) {
-					                                            SetTimeZone(calendar, tz_id);
-					                                            return OP::Operation(calendar, ts);
-				                                            } else {
-					                                            return Cast::Operation<SRC, DST>(ts);
-				                                            }
-			                                            });
+			BinaryExecutor::Execute<string_t, SRC, DST>(tz_vec, ts_vec, result, [&](string_t tz_id, SRC ts) {
+				if (ts.IsFinite()) {
+					SetTimeZone(calendar, tz_id);
+					return OP::Operation(calendar, ts);
+				} else {
+					return Cast::Operation<SRC, DST>(ts);
+				}
+			});
 		}
 	}
 
-	static void AddFunction(const string &name, ExtensionLoader &loader) {
-		ScalarFunctionSet set(name);
+	static void AddFunction(const Identifier &name, ExtensionLoader &loader) {
+		ScalarFunctionSet set {name};
 		set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::TIMESTAMP}, LogicalType::TIMESTAMP_TZ,
 		                               Execute<ICUFromNaiveTimestamp, timestamp_t, timestamp_tz_t>, Bind));
 		set.AddFunction(ScalarFunction({LogicalType::VARCHAR, LogicalType::TIMESTAMP_TZ}, LogicalType::TIMESTAMP,

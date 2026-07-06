@@ -127,6 +127,16 @@ bool DeleteTestPath() {
 	return delete_test_path;
 }
 
+static bool emit_test_events = false;
+
+void SetEmitTestEvents(bool emit) {
+	emit_test_events = emit;
+}
+
+bool EmitTestEventsEnabled() {
+	return emit_test_events;
+}
+
 void ClearTestDirectory() {
 	if (!DeleteTestPath()) {
 		return;
@@ -180,7 +190,7 @@ unique_ptr<DBConfig> GetTestConfig() {
 	result->SetOptionByName("allow_unsigned_extensions", true);
 	auto storage_version = test_config.GetStorageVersion();
 	if (!storage_version.empty()) {
-		result->options.serialization_compatibility = SerializationCompatibility::FromString(storage_version);
+		result->options.storage_compatibility = StorageCompatibility::FromString(storage_version);
 	}
 
 	auto max_threads = test_config.GetMaxThreads();

@@ -12,7 +12,8 @@
 
 namespace duckdb {
 
-BaseStatistics::BaseStatistics() : type(LogicalType::INVALID) {
+BaseStatistics::BaseStatistics() : type(LogicalType::INVALID), has_null(false), has_no_null(false), distinct_count(0) {
+	memset(&stats_union, 0, sizeof(stats_union));
 }
 
 BaseStatistics::BaseStatistics(LogicalType type) {
@@ -20,7 +21,10 @@ BaseStatistics::BaseStatistics(LogicalType type) {
 }
 
 void BaseStatistics::Construct(BaseStatistics &stats, LogicalType type) {
+	stats.has_null = false;
+	stats.has_no_null = false;
 	stats.distinct_count = 0;
+	memset(&stats.stats_union, 0, sizeof(stats.stats_union));
 	stats.type = std::move(type);
 	switch (GetStatsType(stats.type)) {
 	case StatisticsType::LIST_STATS:
@@ -146,7 +150,7 @@ bool BaseStatistics::IsConstant() const {
 	return false;
 }
 
-void BaseStatistics::Merge(const BaseStatistics &other) {
+void BaseStatistics::Merge(const BaseStatistics &other, StatsMergeType merge_type) {
 	has_null = has_null || other.has_null;
 	has_no_null = has_no_null || other.has_no_null;
 	switch (GetStatsType()) {
@@ -154,16 +158,16 @@ void BaseStatistics::Merge(const BaseStatistics &other) {
 		NumericStats::Merge(*this, other);
 		break;
 	case StatisticsType::STRING_STATS:
-		StringStats::Merge(*this, other);
+		StringStats::Merge(*this, other, merge_type);
 		break;
 	case StatisticsType::LIST_STATS:
-		ListStats::Merge(*this, other);
+		ListStats::Merge(*this, other, merge_type);
 		break;
 	case StatisticsType::STRUCT_STATS:
-		StructStats::Merge(*this, other);
+		StructStats::Merge(*this, other, merge_type);
 		break;
 	case StatisticsType::ARRAY_STATS:
-		ArrayStats::Merge(*this, other);
+		ArrayStats::Merge(*this, other, merge_type);
 		break;
 	case StatisticsType::GEOMETRY_STATS:
 		GeometryStats::Merge(*this, other);
@@ -480,7 +484,8 @@ string BaseStatistics::ToString() const {
 	return ToStruct().ToString();
 }
 
-void BaseStatistics::Verify(Vector &vector, const SelectionVector &sel, idx_t count, const bool ignore_has_null) const {
+void BaseStatistics::Verify(const Vector &vector, const SelectionVector &sel, idx_t count,
+                            const bool ignore_has_null) const {
 	D_ASSERT(vector.GetType() == this->type);
 	switch (GetStatsType()) {
 	case StatisticsType::NUMERIC_STATS:
@@ -528,7 +533,7 @@ void BaseStatistics::Verify(Vector &vector, const SelectionVector &sel, idx_t co
 	}
 }
 
-void BaseStatistics::Verify(Vector &vector, idx_t count) const {
+void BaseStatistics::Verify(const Vector &vector, idx_t count) const {
 	auto sel = FlatVector::IncrementalSelectionVector();
 	Verify(vector, *sel, count, false);
 }

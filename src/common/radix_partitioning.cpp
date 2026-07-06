@@ -10,17 +10,8 @@ namespace duckdb {
 //! Templated radix partitioning constants, can be templated to the number of radix bits
 template <idx_t radix_bits>
 struct RadixPartitioningConstants {
-public:
-	//! Bitmask of the upper bits starting at the 5th byte
-	static constexpr idx_t NUM_PARTITIONS = RadixPartitioning::NumberOfPartitions(radix_bits);
-	static constexpr idx_t SHIFT = RadixPartitioning::Shift(radix_bits);
-	static constexpr hash_t MASK = RadixPartitioning::Mask(radix_bits);
-
-public:
-	//! Apply bitmask and right shift to get a number between 0 and NUM_PARTITIONS
 	static hash_t ApplyMask(const hash_t hash) {
-		D_ASSERT((hash & MASK) >> SHIFT < NUM_PARTITIONS);
-		return (hash & MASK) >> SHIFT;
+		return RadixPartitioning::ApplyMask(hash, radix_bits);
 	}
 };
 
@@ -62,7 +53,7 @@ RETURN_TYPE RadixBitsSwitch(const idx_t radix_bits, ARGS &&... args) {
 
 struct SelectFunctor {
 	template <idx_t radix_bits>
-	static idx_t Operation(Vector &hashes, const SelectionVector *sel, const idx_t count,
+	static idx_t Operation(const Vector &hashes, const SelectionVector *sel, const idx_t count,
 	                       const ValidityMask &partition_mask, SelectionVector *true_sel, SelectionVector *false_sel) {
 		using CONSTANTS = RadixPartitioningConstants<radix_bits>;
 		return UnaryExecutor::Select<hash_t>(
@@ -75,15 +66,15 @@ struct SelectFunctor {
 	}
 };
 
-idx_t RadixPartitioning::Select(Vector &hashes, const SelectionVector *sel, const idx_t count, const idx_t radix_bits,
-                                const ValidityMask &partition_mask, SelectionVector *true_sel,
+idx_t RadixPartitioning::Select(const Vector &hashes, const SelectionVector *sel, const idx_t count,
+                                const idx_t radix_bits, const ValidityMask &partition_mask, SelectionVector *true_sel,
                                 SelectionVector *false_sel) {
 	return RadixBitsSwitch<SelectFunctor, idx_t>(radix_bits, hashes, sel, count, partition_mask, true_sel, false_sel);
 }
 
 struct ComputePartitionIndicesFunctor {
 	template <idx_t radix_bits>
-	static void Operation(Vector &hashes, Vector &partition_indices, const idx_t original_count,
+	static void Operation(const Vector &hashes, Vector &partition_indices, const idx_t original_count,
 	                      const SelectionVector &append_sel, const idx_t append_count) {
 		using CONSTANTS = RadixPartitioningConstants<radix_bits>;
 		if (!append_sel.IsSet() || hashes.GetVectorType() == VectorType::CONSTANT_VECTOR) {
@@ -160,9 +151,10 @@ void RadixPartitionedColumnData::ComputePartitionIndices(PartitionedColumnDataAp
 //===--------------------------------------------------------------------===//
 RadixPartitionedTupleData::RadixPartitionedTupleData(BufferManager &buffer_manager,
                                                      shared_ptr<TupleDataLayout> layout_ptr, const MemoryTag tag,
-                                                     const idx_t radix_bits_p, const idx_t hash_col_idx_p)
-    : PartitionedTupleData(PartitionedTupleDataType::RADIX, buffer_manager, layout_ptr, tag), radix_bits(radix_bits_p),
-      hash_col_idx(hash_col_idx_p) {
+                                                     const idx_t radix_bits_p, const idx_t hash_col_idx_p,
+                                                     QueryContext context)
+    : PartitionedTupleData(PartitionedTupleDataType::RADIX, buffer_manager, layout_ptr, tag, context),
+      radix_bits(radix_bits_p), hash_col_idx(hash_col_idx_p) {
 	D_ASSERT(radix_bits <= RadixPartitioning::MAX_RADIX_BITS);
 	D_ASSERT(hash_col_idx < layout.GetTypes().size());
 	Initialize();

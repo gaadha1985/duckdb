@@ -35,7 +35,6 @@ static void PragmaVersionFunction(ClientContext &context, TableFunctionInput &da
 		// finished returning values
 		return;
 	}
-	output.SetCardinality(1);
 	output.data[0].Append(Value(DuckDB::LibraryVersion()));
 	output.data[1].Append(Value(DuckDB::SourceID()));
 	output.data[2].Append(Value(DuckDB::ReleaseCodename()));
@@ -79,6 +78,9 @@ const char *DuckDB::ReleaseCodename() {
 	if (StringUtil::StartsWith(DUCKDB_VERSION, "v1.5.")) {
 		return "Variegata";
 	}
+	if (StringUtil::StartsWith(DUCKDB_VERSION, "v2.0.")) {
+		return "Cyanoptera";
+	}
 	// add new version names here
 
 	// we should not get here, but let's not fail because of it because tags on forks can be whatever
@@ -113,7 +115,6 @@ static void PragmaPlatformFunction(ClientContext &context, TableFunctionInput &d
 		// finished returning values
 		return;
 	}
-	output.SetCardinality(1);
 	output.data[0].Append(Value(DuckDB::Platform()));
 	data.finished = true;
 }

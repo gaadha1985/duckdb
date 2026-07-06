@@ -8,6 +8,7 @@
 #include "test_config.hpp"
 
 #include <functional>
+#include <iostream>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -41,11 +42,8 @@ static void register_sqllogic_test_case(void (*test_fun)(), const string &path, 
 	REGISTER_TEST_CASE(test_fun, normalized_path, tags);
 }
 
-template <bool AUTO_SWITCH_TEST_DIR = false>
-static void testRunner() {
-	// this is an ugly hack that uses the test case name to pass the script file
-	// name if someone has a better idea...
-	const auto name = Catch::getResultCapture().getCurrentTestName();
+template <bool AUTO_SWITCH_TEST_DIR>
+static void RunSQLLogicTest(const string &name, optional_ptr<std::istream> input) {
 	const auto test_dir_path = TestDirectoryPath(); // can vary between tests, and does IO
 	auto &test_config = TestConfiguration::Get();
 
@@ -73,7 +71,7 @@ static void testRunner() {
 	// We assume the test working dir for extensions to be one dir above the test/sql. Note that this is very hacky.
 	// however for now it suffices: we use it to run tests from out-of-tree extensions that are based on the extension
 	// template which adheres to this convention.
-	if (AUTO_SWITCH_TEST_DIR) {
+	if (!input && AUTO_SWITCH_TEST_DIR) {
 		prev_directory = TestGetCurrentDirectory();
 
 		std::size_t found = name.rfind("/test/sql");
@@ -94,19 +92,31 @@ static void testRunner() {
 	runner.environment_variables["TEST_NAME"] = name;
 	runner.environment_variables["TEST_NAME__NO_SLASH"] = StringUtil::Replace(name, "/", "_");
 
+	runner.EmitBegin(name);
+
 	ErrorData error;
 	try {
-		runner.ExecuteFile(name);
+		if (input) {
+			runner.ExecuteStream(*input, name);
+		} else {
+			runner.ExecuteFile(name);
+		}
 	} catch (std::exception &ex) {
 		error = ErrorData(ex);
+	} catch (...) {
+		// Catch's own assertion-failure control exception (not std::exception): the test aborted
+		// mid-run. Catch carries no message; emit the locator stashed at the throw site (file:line —
+		// the full diff is in the captured output), then rethrow so Catch still records the verdict.
+		runner.EmitEnd(name, "error", runner.test_failure_locator);
+		throw;
 	}
 
-	if (AUTO_SWITCH_TEST_DIR) {
+	if (!input && AUTO_SWITCH_TEST_DIR) {
 		test_config.ChangeWorkingDirectory(prev_directory);
 	}
 
 	auto on_cleanup = test_config.OnCleanupCommand();
-	if (!on_cleanup.empty()) {
+	if (!on_cleanup.empty() && runner.db) {
 		// perform clean-up if any is defined
 		try {
 			if (!runner.con) {
@@ -118,8 +128,12 @@ static void testRunner() {
 			}
 		} catch (std::exception &ex) {
 			string cleanup_failure = "Error while running clean-up routine:\n";
-			ErrorData error(ex);
-			cleanup_failure += error.Message();
+			ErrorData cleanup_error(ex);
+			cleanup_failure += cleanup_error.Message();
+			// FAIL throws, unwinding past the unified terminal-event emit below. Emit the end event
+			// here first so a cleanup failure still yields one — preserving the one-begin/one-end
+			// invariant that --emit-test-events consumers rely on.
+			runner.EmitEnd(name, "error", cleanup_failure);
 			FAIL(cleanup_failure);
 		}
 	}
@@ -127,9 +141,31 @@ static void testRunner() {
 	// clear test directory after running tests
 	ClearTestDirectory();
 
+	// Single terminal event (--emit-test-events): status = skip-requirement (whole-test skip) /
+	// error (a std::exception escaped: LoadDatabase / cleanup / unexpected) / ok. Catch-thrown
+	// statement failures are handled by the catch(...) above.
+	if (runner.test_skipped_requirement) {
+		runner.EmitEnd(name, "skip-requirement", runner.test_skip_reason);
+	} else if (error.HasError()) {
+		runner.EmitEnd(name, "error", error.Message());
+	} else {
+		runner.EmitEnd(name, "ok", "");
+	}
 	if (error.HasError()) {
 		FAIL(error.Message());
 	}
+}
+
+template <bool AUTO_SWITCH_TEST_DIR = false>
+static void testRunner() {
+	// this is an ugly hack that uses the test case name to pass the script file
+	// name if someone has a better idea...
+	const auto name = Catch::getResultCapture().getCurrentTestName();
+	RunSQLLogicTest<AUTO_SWITCH_TEST_DIR>(name, nullptr);
+}
+
+static void testRunnerFromStdin() {
+	RunSQLLogicTest<false>("<stdin>", &std::cin);
 }
 
 static string ParseGroupFromPath(string file) {
@@ -228,5 +264,9 @@ void RegisterSqllogictests() {
 			}
 		});
 	}
+}
+
+void RegisterSqllogictestStdin() {
+	register_sqllogic_test_case(testRunnerFromStdin, "<stdin>", "[sqlitelogic][stdin]");
 }
 } // namespace duckdb

@@ -102,34 +102,34 @@ interval_parse_number:
 			// colon: we are parsing a time
 			goto interval_parse_time;
 		} else {
-			if (pos == start_pos) {
-				return false;
-			}
-			// finished the number, parse it from the string
-			string_t nr_string(str + start_pos, UnsafeNumericCast<uint32_t>(pos - start_pos));
-			number = Cast::Operation<string_t, int64_t>(nr_string);
-			fraction = 0;
-			if (c == '.') {
-				idx_t frac_start = 0;
-				for (++pos; pos < len && StringUtil::CharacterIsDigit(str[pos]); ++pos) {
-					if (frac_start == 0) {
-						frac_start = pos;
-					}
-				}
-
-				if (frac_start != 0) {
-					string_t frac_string(str + frac_start - 1, UnsafeNumericCast<uint32_t>(pos - frac_start + 1));
-					fraction = Cast::Operation<string_t, double>(frac_string);
-				}
-			}
-			if (negative) {
-				number = -number;
-				fraction = -fraction;
-			}
-			goto interval_parse_identifier;
+			break;
 		}
 	}
-	goto end_of_string;
+	{
+		if (pos == start_pos) {
+			return false;
+		}
+		string_t nr_string(str + start_pos, UnsafeNumericCast<uint32_t>(pos - start_pos));
+		number = Cast::Operation<string_t, int64_t>(nr_string);
+		fraction = 0;
+		if (pos < len && str[pos] == '.') {
+			idx_t frac_start = 0;
+			for (++pos; pos < len && StringUtil::CharacterIsDigit(str[pos]); ++pos) {
+				if (frac_start == 0) {
+					frac_start = pos;
+				}
+			}
+			if (frac_start != 0) {
+				string_t frac_string(str + frac_start - 1, UnsafeNumericCast<uint32_t>(pos - frac_start + 1));
+				fraction = Cast::Operation<string_t, double>(frac_string);
+			}
+		}
+		if (negative) {
+			number = -number;
+			fraction = -fraction;
+		}
+		goto interval_parse_identifier;
+	}
 interval_parse_time : {
 	// parse the remainder of the time as a Time type
 	dtime_t time;
@@ -137,7 +137,7 @@ interval_parse_time : {
 	if (!Time::TryConvertInterval(str + start_pos, len - start_pos, pos, time)) {
 		return false;
 	}
-	result.micros += time.micros;
+	result.micros += time.value;
 	found_any = true;
 	if (negative) {
 		result.micros = -result.micros;
@@ -437,7 +437,7 @@ interval_t Interval::GetAge(TimestampComponents ts1, TimestampComponents ts2, bo
 	interval_t interval;
 	interval.months = year_diff * MONTHS_PER_YEAR + month_diff;
 	interval.days = day_diff;
-	interval.micros = Time::FromTime(hour_diff, min_diff, sec_diff, micros_diff).micros;
+	interval.micros = Time::FromTime(hour_diff, min_diff, sec_diff, micros_diff).value;
 
 	return interval;
 }
@@ -522,11 +522,11 @@ date_t Interval::Add(date_t left, interval_t right) {
 dtime_t Interval::Add(dtime_t left, interval_t right, date_t &date) {
 	int64_t diff = right.micros - ((right.micros / Interval::MICROS_PER_DAY) * Interval::MICROS_PER_DAY);
 	left += diff;
-	if (left.micros >= Interval::MICROS_PER_DAY) {
-		left.micros -= Interval::MICROS_PER_DAY;
+	if (left.value >= Interval::MICROS_PER_DAY) {
+		left.value -= Interval::MICROS_PER_DAY;
 		date.days++;
-	} else if (left.micros < 0) {
-		left.micros += Interval::MICROS_PER_DAY;
+	} else if (left.value < 0) {
+		left.value += Interval::MICROS_PER_DAY;
 		date.days--;
 	}
 	return left;

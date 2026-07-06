@@ -201,7 +201,6 @@ struct ICUTableRange {
 			}
 			if (state.empty_range) {
 				// empty range
-				output.SetCardinality(0);
 				state.current_input_row++;
 				state.initialized_row = false;
 				return OperatorResultType::HAVE_MORE_OUTPUT;
@@ -247,6 +246,7 @@ struct ICUTableRange {
 		    RangeDateTimeLocalInit);
 		generate_series_function.in_out_function = ICUTableRangeFunction<true>;
 		generate_series_function.cardinality = Cardinality;
+		generate_series_function.return_type = TableFunctionReturnType::SET_RETURNING_FUNCTION;
 		generate_series.AddFunction(generate_series_function);
 
 		loader.RegisterFunction(generate_series);

@@ -32,6 +32,7 @@
 namespace duckdb {
 
 void RegisterSqllogictests();
+void RegisterSqllogictestStdin();
 bool SummarizeFailures();
 
 void DeleteDatabase(string path);
@@ -43,6 +44,8 @@ void TestChangeDirectory(string path);
 
 void SetDeleteTestPath(bool delete_path);
 bool DeleteTestPath();
+void SetEmitTestEvents(bool emit);
+bool EmitTestEventsEnabled();
 void ClearTestDirectory();
 string TestGetCurrentDirectory();
 string TestDirectoryPath();

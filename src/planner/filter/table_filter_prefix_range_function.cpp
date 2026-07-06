@@ -60,14 +60,13 @@ struct PrefixRangeBitmapBuildState : public PrefixRangeFilter::BuildState {
 template <typename U>
 class PrefixRangeBitmap {
 public:
-	void Initialize(ClientContext &context, U min_p, U span_p) {
+	void Initialize(ClientContext &context, U min_p, U span_p, idx_t max_bits) {
 		min = min_p;
 		span = span_p;
 		shift = 0;
 
-		if (span >= CAP_BITS) {
-			const auto q = UnsafeNumericCast<uint64_t>(span >> MAX_PREFIX_LENGTH);
-			shift = (q <= 1) ? 0 : (64 - CountZeros<uint64_t>::Leading(q - 1));
+		while ((span >> shift) >= max_bits) {
+			shift++;
 		}
 
 		const idx_t buckets = UnsafeNumericCast<idx_t>((span >> shift) + 1);
@@ -87,7 +86,7 @@ public:
 	}
 
 	template <typename T, typename CONVERTER>
-	void InsertKeys(Vector &keys, idx_t count, uint64_t *state_bitmap) const {
+	void InsertKeys(Vector &keys, uint64_t *state_bitmap) const {
 		for (const auto &entry : keys.template ValidValues<T>()) {
 			const U y = CONVERTER::Convert(entry.GetValue()) - min;
 			// All keys are in-range by construction, so the range check can be omitted here.
@@ -189,8 +188,6 @@ public:
 	}
 
 private:
-	static constexpr idx_t MAX_PREFIX_LENGTH = 20;
-	static constexpr idx_t CAP_BITS = 1ULL << MAX_PREFIX_LENGTH;
 	static constexpr idx_t WORD_SHIFT = 6;
 	static constexpr idx_t WORD_MASK = 63;
 
@@ -244,21 +241,22 @@ private:
 	using Comparable = typename MakeUnsigned<T>::type;
 
 public:
-	void Initialize(ClientContext &context, idx_t number_of_rows, Value min_val, Value max_val) override {
+	void Initialize(ClientContext &context, idx_t number_of_rows, Value min_val, Value max_val,
+	                idx_t max_bits) override {
 		D_ASSERT(min_val <= max_val);
 		D_ASSERT(number_of_rows > 0);
 		const auto min = NumericConverter<T>::Convert(min_val.GetValueUnsafe<T>());
 		const auto max = NumericConverter<T>::Convert(max_val.GetValueUnsafe<T>());
-		bitmap.Initialize(context, min, max - min);
+		bitmap.Initialize(context, min, max - min, max_bits);
 	}
 
 	unique_ptr<BuildState> InitializeBuildState(ClientContext &context) const override {
 		return bitmap.InitializeBuildState(context);
 	}
 
-	void InsertKeys(Vector &keys, idx_t count, BuildState &state) const override {
+	void InsertKeys(Vector &keys, BuildState &state) const override {
 		auto &bitmap_state = state.Cast<PrefixRangeBitmapBuildState>();
-		bitmap.template InsertKeys<T, NumericConverter<T>>(keys, count, bitmap_state.bitmap);
+		bitmap.template InsertKeys<T, NumericConverter<T>>(keys, bitmap_state.bitmap);
 	}
 
 	void MergeBuildState(BuildState &state) override {
@@ -297,22 +295,23 @@ private:
 
 class StringPrefixRangeFilter : public PrefixRangeFilter {
 public:
-	void Initialize(ClientContext &context, idx_t number_of_rows, Value min_val, Value max_val) override {
+	void Initialize(ClientContext &context, idx_t number_of_rows, Value min_val, Value max_val,
+	                idx_t max_bits) override {
 		D_ASSERT(min_val <= max_val);
 		D_ASSERT(number_of_rows > 0);
 		const auto min = StringPrefixConverter::Convert(min_val.GetValueUnsafe<string_t>());
 		const auto max = StringPrefixConverter::Convert(max_val.GetValueUnsafe<string_t>());
 		D_ASSERT(min <= max);
-		bitmap.Initialize(context, min, max - min);
+		bitmap.Initialize(context, min, max - min, max_bits);
 	}
 
 	unique_ptr<BuildState> InitializeBuildState(ClientContext &context) const override {
 		return bitmap.InitializeBuildState(context);
 	}
 
-	void InsertKeys(Vector &keys, idx_t count, BuildState &state) const override {
+	void InsertKeys(Vector &keys, BuildState &state) const override {
 		auto &bitmap_state = state.Cast<PrefixRangeBitmapBuildState>();
-		bitmap.template InsertKeys<string_t, StringPrefixConverter>(keys, count, bitmap_state.bitmap);
+		bitmap.template InsertKeys<string_t, StringPrefixConverter>(keys, bitmap_state.bitmap);
 	}
 
 	void MergeBuildState(BuildState &state) override {
@@ -502,7 +501,7 @@ PrefixRangeInitLocalState(ExpressionState &state, const BoundFunctionExpression 
 static idx_t PrefixRangeSelect(DataChunk &args, ExpressionState &state, optional_ptr<const SelectionVector> sel,
                                optional_ptr<SelectionVector> true_sel, optional_ptr<SelectionVector> false_sel) {
 	auto &func_expr = state.expr.Cast<BoundFunctionExpression>();
-	auto &func_data = func_expr.bind_info->Cast<PrefixRangeFunctionData>();
+	auto &func_data = func_expr.BindInfo()->Cast<PrefixRangeFunctionData>();
 	auto local_state_ptr = ExecuteFunctionState::GetFunctionState(state);
 	auto tracking_state = local_state_ptr ? &local_state_ptr->Cast<SelectivityTrackingLocalState>() : nullptr;
 
@@ -548,19 +547,35 @@ FilterPropagateResult PrefixRangeScalarFun::FilterPrune(const FunctionStatistics
 	if (!data.filter || !data.filter->IsInitialized()) {
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
-	if (input.stats.GetStatsType() != StatisticsType::NUMERIC_STATS) {
+	auto column_stats = input.ChildStats(0);
+	if (!column_stats) {
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
-	if (!NumericStats::HasMinMax(input.stats)) {
+	auto &stats = *column_stats;
+	switch (stats.GetStatsType()) {
+	case StatisticsType::NUMERIC_STATS: {
+		if (!NumericStats::HasMinMax(stats)) {
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		}
+		const auto min = NumericStats::Min(stats);
+		const auto max = NumericStats::Max(stats);
+		if (min > max) {
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		}
+		return data.filter->LookupRange(min, max);
+	}
+	case StatisticsType::STRING_STATS: {
+		if (!StringStats::HasMinMax(stats)) {
+			return FilterPropagateResult::NO_PRUNING_POSSIBLE;
+		}
+		// String stats may contain raw parquet bytes that are not valid UTF-8. Reconstruct them as BLOBs so the
+		// prefix-range comparable logic can inspect the raw bytes without value-construction validation.
+		return data.filter->LookupRange(Value::BLOB_RAW(StringStats::Min(stats)),
+		                                Value::BLOB_RAW(StringStats::Max(stats)));
+	}
+	default:
 		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
 	}
-
-	const auto min = NumericStats::Min(input.stats);
-	const auto max = NumericStats::Max(input.stats);
-	if (min > max) {
-		return FilterPropagateResult::NO_PRUNING_POSSIBLE;
-	}
-	return data.filter->LookupRange(min, max);
 }
 
 ScalarFunction TableFilterPrefixRangeFun::GetFunction() {

@@ -4,7 +4,6 @@
 #include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/interval.hpp"
-#include "duckdb/common/types/time.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/vector_operations/ternary_executor.hpp"
 
@@ -16,8 +15,8 @@ namespace duckdb {
 namespace {
 struct DateDiff {
 	template <class TA, class TB, class TR, class OP>
-	static inline void BinaryExecute(Vector &left, Vector &right, Vector &result, idx_t count) {
-		BinaryExecutor::Execute<TA, TB, TR>(left, right, result, count, [&](TA startdate, TB enddate) -> optional<TR> {
+	static inline void BinaryExecute(const Vector &left, const Vector &right, Vector &result) {
+		BinaryExecutor::Execute<TA, TB, TR>(left, right, result, [&](TA startdate, TB enddate) -> optional<TR> {
 			if (startdate.IsFinite() && enddate.IsFinite()) {
 				return OP::template Operation<TA, TB, TR>(startdate, enddate);
 			} else {
@@ -284,27 +283,27 @@ int64_t DateDiff::ISOYearOperator::Operation(dtime_t startdate, dtime_t enddate)
 
 template <>
 int64_t DateDiff::MicrosecondsOperator::Operation(dtime_t startdate, dtime_t enddate) {
-	return enddate.micros - startdate.micros;
+	return enddate.value - startdate.value;
 }
 
 template <>
 int64_t DateDiff::MillisecondsOperator::Operation(dtime_t startdate, dtime_t enddate) {
-	return enddate.micros / Interval::MICROS_PER_MSEC - startdate.micros / Interval::MICROS_PER_MSEC;
+	return enddate.value / Interval::MICROS_PER_MSEC - startdate.value / Interval::MICROS_PER_MSEC;
 }
 
 template <>
 int64_t DateDiff::SecondsOperator::Operation(dtime_t startdate, dtime_t enddate) {
-	return enddate.micros / Interval::MICROS_PER_SEC - startdate.micros / Interval::MICROS_PER_SEC;
+	return enddate.value / Interval::MICROS_PER_SEC - startdate.value / Interval::MICROS_PER_SEC;
 }
 
 template <>
 int64_t DateDiff::MinutesOperator::Operation(dtime_t startdate, dtime_t enddate) {
-	return enddate.micros / Interval::MICROS_PER_MINUTE - startdate.micros / Interval::MICROS_PER_MINUTE;
+	return enddate.value / Interval::MICROS_PER_MINUTE - startdate.value / Interval::MICROS_PER_MINUTE;
 }
 
 template <>
 int64_t DateDiff::HoursOperator::Operation(dtime_t startdate, dtime_t enddate) {
-	return enddate.micros / Interval::MICROS_PER_HOUR - startdate.micros / Interval::MICROS_PER_HOUR;
+	return enddate.value / Interval::MICROS_PER_HOUR - startdate.value / Interval::MICROS_PER_HOUR;
 }
 
 template <typename TA, typename TB, typename TR>
@@ -361,55 +360,55 @@ struct DateDiffTernaryOperator {
 };
 
 template <typename TA, typename TB, typename TR>
-void DateDiffBinaryExecutor(DatePartSpecifier type, Vector &left, Vector &right, Vector &result, idx_t count) {
+void DateDiffBinaryExecutor(DatePartSpecifier type, const Vector &left, const Vector &right, Vector &result) {
 	switch (type) {
 	case DatePartSpecifier::YEAR:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::YearOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::YearOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::MONTH:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MonthOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MonthOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::DAY:
 	case DatePartSpecifier::DOW:
 	case DatePartSpecifier::ISODOW:
 	case DatePartSpecifier::DOY:
 	case DatePartSpecifier::JULIAN_DAY:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::DayOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::DayOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::DECADE:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::DecadeOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::DecadeOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::CENTURY:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::CenturyOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::CenturyOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::MILLENNIUM:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MilleniumOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MilleniumOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::QUARTER:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::QuarterOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::QuarterOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::WEEK:
 	case DatePartSpecifier::YEARWEEK:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::WeekOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::WeekOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::ISOYEAR:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::ISOYearOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::ISOYearOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::MICROSECONDS:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MicrosecondsOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MicrosecondsOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::MILLISECONDS:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MillisecondsOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MillisecondsOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::SECOND:
 	case DatePartSpecifier::EPOCH:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::SecondsOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::SecondsOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::MINUTE:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MinutesOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::MinutesOperator>(left, right, result);
 		break;
 	case DatePartSpecifier::HOUR:
-		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::HoursOperator>(left, right, result, count);
+		DateDiff::BinaryExecute<TA, TB, TR, DateDiff::HoursOperator>(left, right, result);
 		break;
 	default:
 		throw NotImplementedException("Specifier type not implemented for DATEDIFF");
@@ -419,9 +418,9 @@ void DateDiffBinaryExecutor(DatePartSpecifier type, Vector &left, Vector &right,
 template <typename T>
 void DateDiffFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 	D_ASSERT(args.ColumnCount() == 3);
-	auto &part_arg = args.data[0];
-	auto &start_arg = args.data[1];
-	auto &end_arg = args.data[2];
+	const auto &part_arg = args.data[0];
+	const auto &start_arg = args.data[1];
+	const auto &end_arg = args.data[2];
 
 	if (part_arg.GetVectorType() == VectorType::CONSTANT_VECTOR) {
 		// Common case of constant part.
@@ -429,9 +428,9 @@ void DateDiffFunction(DataChunk &args, ExpressionState &state, Vector &result) {
 			throw InternalException("DateDiff called with constant NULL part");
 		}
 		const auto type = GetDatePartSpecifier(ConstantVector::GetData<string_t>(part_arg)->GetString());
-		DateDiffBinaryExecutor<T, T, int64_t>(type, start_arg, end_arg, result, args.size());
+		DateDiffBinaryExecutor<T, T, int64_t>(type, start_arg, end_arg, result);
 	} else {
-		TernaryExecutor::Execute<string_t, T, T, int64_t>(part_arg, start_arg, end_arg, result, args.size(),
+		TernaryExecutor::Execute<string_t, T, T, int64_t>(part_arg, start_arg, end_arg, result,
 		                                                  DateDiffTernaryOperator::Operation<string_t, T, T, int64_t>);
 	}
 }
